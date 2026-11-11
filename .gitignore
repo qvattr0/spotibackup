@@ -1,0 +1,17 @@
+# Environment / secrets
+.env
+*.env.local
+
+# Backup output
+data/
+backups/
+*.mp3
+*.flac
+*.ogg
+*.m4a
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
