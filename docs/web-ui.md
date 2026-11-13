@@ -7,6 +7,7 @@ The screens are drawn in Pencil, in `docs/ui-design/spotibackup.pen`. This docum
 **Status:** Phase 1 draft, awaiting review.
 - **Shaped with the user:** every page: Setup wizard, Library, Albums, Dashboard, Schedule, History, Settings and Player.
 - **Not drawn yet:** the Pencil screens.
+- **Not reviewed yet:** the Dashboard's Full backup card, and the backup-length line in wizard step 8.
 
 ## Design language
 
@@ -160,6 +161,7 @@ Followed and other people's playlists are never tracked automatically. They are 
 
 ### 8. Done
 - **Content:** a summary of the account, format, folder and what is tracked ("23 playlists + Liked Songs").
+- **Backup length:** how long the first full backup takes, since recording is real time: "About 298 h of music to record". While the track lists load, it shows "Measuring…". Followed playlists add "+ 2 followed playlists (unknown length)". The figure comes from the [backlog estimate](design.md#backlog-estimate).
 - **Primary:** "Open Library".
 - **Secondary:** "Back up now". It starts a first run of everything tracked and opens the Dashboard.
 
@@ -183,6 +185,7 @@ Followed and other people's playlists are never tracked automatically. They are 
 | GET | `/api/storage` | 6 | Whether `/music` is mounted and writable, plus free bytes. |
 | GET/PUT | `/api/settings` | 6, 7, Settings | Format, bitrate, folder layout and `auto_track_owned`. |
 | GET | `/api/library/summary` | 7, 8 | Count of owned playlists, and whether Liked Songs is tracked. |
+| GET | `/api/backlog` | 8 | The backup length. Shared with the Dashboard. |
 | WS | `/api/events` | all | Live push. During setup it carries client-install progress and setup state changes. |
 
 ---
@@ -261,7 +264,7 @@ Clicking an item opens it in place, like a playlist page in the client.
 | Duration | |
 | State | Recorded (with file size, and the file path on hover) · Skipped (duplicate) · Missing · Failed (reason) · New. |
 
-- **Playlists without item access** (followed or linked): the table is built from what has been recorded so far, with the note "Spotify doesn't share this playlist's track list with the app; tracks appear here as they're recorded."
+- **Playlists without item access** (followed or linked, unless you collaborate on them): the table is built from what has been recorded so far, with the note "Spotify doesn't share this playlist's track list with the app; tracks appear here as they're recorded."
 - **Footer:** "Remove from Library" for added items; "Stop tracking" for your own. Neither one deletes files.
 
 ### Add playlists (the + modal)
@@ -375,7 +378,7 @@ A modal in the same style as the Library's + modal.
 The landing page after setup. It has two states: **idle** and **running**. A WebSocket switches it between them live.
 
 ### Idle
-Two cards, stacked.
+Three cards, stacked.
 
 **1. Next backup**
 - **Content:**
@@ -387,7 +390,18 @@ Two cards, stacked.
   - **Held:** if the Web API connection has expired, or the client is logged out, the card turns red and says why. Its main button becomes Reconnect, or "Log in again" (wizard step 3), in place of Run now.
 - **What Run now runs:** every tracked playlist, plus Queued and Partial albums.
 
-**2. Last run**
+**2. Full backup**
+How far the backup of everything tracked has got, and how long the rest takes. The figures come from the [backlog estimate](design.md#backlog-estimate).
+- **Progress bar:** recorded time out of total time, with "4,708 of 5,120 tracks · 87%" under it.
+- **Time left:** "About 27 h of recording left".
+- **Finish:** "Done around Sat 16 Nov at this schedule", from the schedule's active hours. With Manual only: "Run now to start; recording is real time".
+- **Unknown items:** "+ 2 followed playlists (unknown length)", when there are any.
+- **Freshness:** a quiet "Updated 01:00" line. The figures refresh when the page opens, at most once every 15 minutes, and after each item.
+- **Variants:**
+  - **Complete:** a green check and "Everything is backed up · 298 h of music".
+  - **Measuring:** before the first track lists have loaded, a skeleton bar and "Measuring your library…".
+
+**3. Last run**
 - **When:** start time, duration and trigger (Scheduled or Run now).
 - **Outcome pill:** Completed · Completed with issues · Window ended · Stopped · Failed.
 - **Counters:** recorded · skipped (duplicate) · failed, and the size added ("+412 MB").
@@ -401,6 +415,7 @@ The item queue is the main element. A compact now-playing strip sits above it.
 **Run header**
 - "Backing up · started 01:00 · 0:42 elapsed · Scheduled · stops by 07:00". The last part only appears for scheduled runs.
 - Live counters: Recorded n · Skipped n · Failed n.
+- Time left for the whole backlog, from the Full backup card: "about 26 h left".
 - **Stop, a split button:**
   - **Stop after this track** (the main action): nothing is lost. The header says "Stopping after this track…" until it ends.
   - **Stop now** (from the arrow): first a confirm, "The current track will be discarded and recorded next time."
@@ -457,12 +472,13 @@ Inline alerts sit between the strip and the queue.
 | GET | `/api/status` | `state` (`idle`, `running`, `paused`, `stopping` or `finishing`), the current run, item and track, and the counters. Read on first load; after that the WS keeps it current. |
 | GET | `/api/schedule/next` | `{at, playlists_to_check, albums_queued, held_reason}` |
 | GET | `/api/runs/last` | The last run's summary and its top issues. |
+| GET | `/api/backlog` | `{tracks_total, tracks_recorded, seconds_total, seconds_left, unknown_items, finish_at, as_of}`. `finish_at` is null with Manual only. Shared with wizard step 8 and the Schedule preview. |
 | POST | `/api/runs` | Run now. Without `items` it runs everything due; with `{items: [...]}` it adds those items (from the Library or Albums). |
 | GET | `/api/runs/current` | The queue, with per-item state and the current item's track list. |
 | POST | `/api/runs/current/stop` | `{mode: "after_track" \| "now"}` |
 | POST | `/api/runs/current/resume` | After a device takeover. |
 | DELETE | `/api/runs/current/items/{id}` | Removes an Up next item. |
-| WS | `/api/events` | Pushes these events:<br>• run: `run.state`, `run.queue`, `item.state`<br>• Spytify, relayed: `track.started`, `track.finished`, `track.skipped`, `level`, `session.state`<br>• warnings: `device.moved`, `error` |
+| WS | `/api/events` | Pushes these events:<br>• run: `run.state`, `run.queue`, `item.state`<br>• `backlog`, after each item and each catalog refresh<br>• Spytify, relayed: `track.started`, `track.finished`, `track.skipped`, `level`, `session.state`<br>• warnings: `device.moved`, `error` |
 
 ---
 
@@ -533,6 +549,7 @@ Shown on the page and in the modal, where it updates as you paint:
   - "412 tracks waiting · about 27 h of recording · about 4 days at this schedule".
   - Followed playlists can't be estimated, so it adds "+ followed playlists (unknown)".
   - When nothing is waiting: "Everything is up to date".
+  - It's the same [backlog estimate](design.md#backlog-estimate) as the Dashboard's Full backup card, worked out against the grid being edited.
 
 ### Schedule endpoints
 
@@ -540,7 +557,7 @@ Shown on the page and in the modal, where it updates as you paint:
 |---|---|---|
 | GET | `/api/schedule` | `{hours: {mon: [1,2,3,4,5,6], tue: […], …}, tz}`. Each list holds the active hours of that day (0–23). All lists empty means Manual only. |
 | PUT | `/api/schedule` | Saves. Same shape. |
-| POST | `/api/schedule/preview` | Body: `{hours}`, which may be unsaved. Returns `{windows_per_week, hours_per_week, next_windows: [...], backlog: {tracks, seconds, unknown_items, eta}}`. |
+| POST | `/api/schedule/preview` | Body: `{hours}`, which may be unsaved. Returns `{windows_per_week, hours_per_week, next_windows: [...], backlog}`. `backlog` has the same shape as `GET /api/backlog`, with `finish_at` worked out for the posted hours. |
 | GET | `/api/schedule/next` | Shared with the Dashboard: `{at, window_end, playlists_to_check, albums_queued, held_reason}`. |
 
 ---
@@ -818,7 +835,7 @@ The feasibility prototype (`prototype/`, on a parallel branch) settles these. Th
 7. ~~**Playlists made by Spotify:**~~ **Decided:** not supported. There is no link input.
 8. ~~**Client login surviving a recreate:**~~ **Resolved:** the login survives. The prototype recreated the container with `--force-recreate`, and the device kept its name and ID. This needs a stable `/config/machine-id` and an unchanged `DEVICE_NAME`; the container's real hostname doesn't matter. Image updates don't need a new QR scan. Changing `DEVICE_NAME` is untested, so Settings keeps its warning. A "client logged out" Dashboard state is still useful as a fallback.
 9. **Liked Songs playback:** can `PUT /me/player/play` start Liked Songs as a context, or must the controller pass its track URIs in batches? Either way, the end of the item has to be detected the same way.
-10. **Linked playlists:** for a public playlist you don't follow, does `GET /playlists/{id}` return name and cover (for the modal's preview) when `/items` returns 403? And does playback work, as it does for followed playlists?
-11. **Saved albums access:** do the saved-album endpoints (`/me/albums`, and album tracks) work for a 2026 dev-mode app? The Albums page depends on them.
+10. **Linked playlists:** for a public playlist you don't follow, does `GET /playlists/{id}` return name and cover (for the modal's preview) when `/items` returns 403? And does playback work, as it does for followed playlists? **Documented, not tested:** Spotify's February 2026 migration guide says such playlists return metadata without `items`. Playback still needs a live test.
+11. **Saved albums access:** do the saved-album endpoints (`/me/albums`, and album tracks) work for a 2026 dev-mode app? The Albums page depends on them. **Documented, not tested:** the February 2026 changelog lists both as still available, and `/me/albums` still includes each album's tracks with `duration_ms`. Needs a live test.
 12. **Browser notifications over HTTP:** notifications need a secure context. Can the image serve HTTPS itself (for example, with a self-signed certificate on a second port)? Or should the docs point to the UGOS reverse proxy? With a self-signed certificate the browser shows a warning, and Chrome may still refuse notifications.
 13. **Client install timing:** is installing the client on first start (not baked into the image) fast and reliable enough to show as a wizard step?

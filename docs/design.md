@@ -33,7 +33,7 @@ spotibackup is a single Docker image for a UGREEN NASync DXP4800+ (x86_64, UGOS 
 
 **Base image:** Spotify Linux 1.2.77+ needs glibc 2.38+, so the image is Ubuntu 24.04 or Debian 13.
 
-**Developer app:** since March 2026, a Development Mode app needs a Premium owner and allows up to five users.
+**Developer app:** since March 2026, a Development Mode app needs a Premium owner and allows up to five users. The same change narrowed the Web API: see [Web API usage](#web-api-usage).
 
 ## Container
 
@@ -68,16 +68,59 @@ One container, with s6-overlay supervising:
 
 ## Run flow, per playlist or album
 
-1. Fetch the track list through the Web API. Skip the item if every file already exists.
+1. Fetch the track list through the Web API. Skip the item if every file already exists. A playlist without item access (see [Web API usage](#web-api-usage)) has no track list, so it is always played.
 2. Pause the player and turn shuffle and repeat off.
 3. Start `spytifyd` for this item with the current recorder settings, then call `session.start`.
 4. `PUT /me/player/play` with the container's `device_id` and the item's `context_uri`.
 5. Follow Spytify's events. Spotify pauses at the end of an album or playlist. After 20 s of silence, `spytifyd` saves the last track and exits (`--idle-exit 20s`), about 25–30 s after the pause.
    - **No client restart is needed.**
    - **A pause of more than 20 s in the middle of an item** ends it early. This happens when another device takes over or the network stalls. The controller re-queues the item, and the tracks already recorded are skipped as duplicates.
-6. Write a `.m3u` for the playlist, in the Web API's track order.
+6. Write a `.m3u` for the playlist, in the Web API's track order. For a playlist without item access, use the order the tracks were recorded in.
 
 The scheduler queues items. An item forced from the UI goes right after the current item. One item records at a time.
+
+## Web API usage
+
+Spotify narrowed the Web API for Development Mode apps in February 2026: new apps from 11 February, existing apps from 9 March. spotibackup only uses endpoints that are still available ([migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide)).
+
+| Endpoint | Used for | Page size |
+|---|---|---|
+| `GET /me` | The display name ("Connected as …"). | — |
+| `GET /me/playlists` | The playlist list, each with its owner, `snapshot_id` and `items.total`. | 50 |
+| `GET /playlists/{id}/items` | A playlist's tracks. It replaces the removed `/playlists/{id}/tracks`. | 50 |
+| `GET /playlists/{id}` | Name, owner and cover for a pasted link. | — |
+| `GET /me/tracks` | Liked Songs, newest first. | 50 |
+| `GET /me/albums` | Saved albums, each with its first page of tracks. | 50 |
+| `GET /albums/{id}/tracks` | The rest of an album longer than that first page. | 50 |
+| `GET /me/player/devices` and the player controls (`play`, `pause`, `shuffle`, `repeat`) | Finding the container's device and starting each item. | — |
+
+**The 2026 rules that shape the design:**
+- **Item access:** `/items` returns tracks only for playlists you own or collaborate on. Any other playlist returns 403, and `/me/playlists` leaves out its `items` total. So followed and linked playlists have no track list or total until they're recorded. A followed playlist you collaborate on has access and behaves like your own.
+- **Renamed fields:** a playlist's contents moved from `tracks` to `items`, and each entry's track from `track` to `item`. The controller reads only the new names.
+- **No batch lookups:** `GET /tracks?ids=` and `GET /albums?ids=` are gone. Everything the controller needs, `duration_ms` included, comes with the listings above, so it's stored when it's fetched.
+- **Removed fields:** among others, `popularity` and `linked_from` on tracks, and `label` on albums. spotibackup uses none of them.
+- **Rate limits:** Spotify publishes no Development Mode numbers. Limits apply over a rolling 30 s window, plus quota buckets shared by every app on the developer account. A `429` carries `Retry-After`, which the controller waits out.
+
+**Load:**
+- Each request names only the fields it needs through the `fields` parameter: track ID, title, artists, album, cover, `duration_ms` and `is_local`.
+- **Playlists:** the controller stores each one's `snapshot_id` and refetches its items only when that changes.
+- **Liked Songs:** it has no `snapshot_id`. The controller reads from the newest page until it reaches a track it already has, then compares `total`. If the total doesn't match, it refetches the whole list.
+- **Albums:** they don't change, so they're fetched once, when added.
+- **Example:** a first fetch of 23 playlists with 3,000 tracks, 2,000 Liked Songs and 100 saved albums is about 110 requests. A refresh where nothing changed is a few.
+
+## Backlog estimate
+
+Recording happens in real time, so a backup takes about as long as the music still to record. The Dashboard's Full backup card, wizard step 8 and the Schedule preview all show this estimate, from one calculation (`GET /api/backlog`).
+
+- **Catalog:** every tracked item's track list with `duration_ms`, kept in SQLite and refreshed as described in [Web API usage](#web-api-usage). It's refreshed at the start of each run, and when the Dashboard or Schedule page opens, at most once every 15 minutes.
+- **What's recorded:** History's per-track records, keyed by Spotify track ID.
+- **Time left:**
+  - the sum of `duration_ms` over tracks not recorded yet, counting each track ID once however many items it's in;
+  - plus about 35 s for each item with something to record: a few seconds to start, and the 25–30 s Finishing tail;
+  - local files (`is_local`) and entries with no `item` are left out, because they can't be played.
+- **Finish date:** the controller walks the schedule's active hours forward from now until the time left is used up. With Manual only, there's no date.
+- **Unknown items:** followed and linked playlists have no track list, so they're left out of the figure and counted separately.
+- **Accuracy:** duplicates are skipped in seconds, so they barely count. The same song can have a different track ID on a single and on its album; it's counted twice but recorded once, so the estimate leans slightly high.
 
 ## Distribution
 
@@ -109,8 +152,9 @@ The prototype settled these (details in `prototype/FINDINGS.md`):
 - Recording works end to end.
 
 Still to validate:
-- The saved-album endpoints under the 2026 dev-mode rules.
-- Followed playlists return 403 on their item list, but play.
+- **Saved albums:** Spotify's February 2026 changelog lists `/me/albums` and `/albums/{id}/tracks` as still available. Needs a live test.
+- **Followed playlists:** Spotify documents the 403 on `/items`. Whether they still play by `context_uri` needs a live test.
+- **Field names:** Spotify's reference pages still show some fields the changelog removed, so the fields the controller reads need checking against a live response.
 
 ## Component Rules
 
