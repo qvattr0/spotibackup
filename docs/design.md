@@ -111,3 +111,20 @@ The prototype settled these (details in `prototype/FINDINGS.md`):
 Still to validate:
 - The saved-album endpoints under the 2026 dev-mode rules.
 - Followed playlists return 403 on their item list, but play.
+
+## Component Rules
+
+Rules for the components in `ui-design/spotibackup.pen`. Follow them when editing the design file.
+
+### Shapes vs. icons in a leading slot
+
+Some components take either a **shape** or an **icon** in the same slot. A Lucide icon has built-in whitespace inside its box, while a shape doesn't. So the padding on an icon's side is 2 px smaller than on a shape's side, which makes both look the same distance from the edge.
+
+### Status pill (`Pill` component)
+
+| Leading element | Padding (top, right, bottom, left) |
+| --- | --- |
+| Shape: 6 px `Dot` ellipse (the component's default) | `3, 8, 3, 8` |
+| Icon: 12 px Lucide icon, for example the dashed `circle-dot-dashed` for "Recording" | `3, 8, 3, 6` |
+
+- When you swap a pill's dot for an icon, also override that instance's padding to `3, 8, 3, 6`. When you swap it back to a dot, remove the override.
