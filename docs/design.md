@@ -99,7 +99,7 @@ Spotify narrowed the Web API for Development Mode apps in February 2026: new app
 - **Renamed fields:** a playlist's contents moved from `tracks` to `items`, and each entry's track from `track` to `item`. The controller reads only the new names.
 - **No batch lookups:** `GET /tracks?ids=` and `GET /albums?ids=` are gone. Everything the controller needs, `duration_ms` included, comes with the listings above, so it's stored when it's fetched.
 - **Removed fields:** among others, `popularity` and `linked_from` on tracks, and `label` on albums. spotibackup uses none of them.
-- **Rate limits:** Spotify publishes no Development Mode numbers. Limits apply over a rolling 30 s window, plus quota buckets shared by every app on the developer account. A `429` carries `Retry-After`, which the controller waits out.
+- **Rate limits:** Spotify publishes no Development Mode numbers. Limits apply over a rolling 30 s window, plus quota buckets shared by every app on the developer account. A `429` carries `Retry-After`; see Requests below for how the controller handles it.
 
 **Load:**
 - Each request names only the fields it needs through the `fields` parameter: track ID, title, artists, album, cover, `duration_ms` and `is_local`.
@@ -107,6 +107,20 @@ Spotify narrowed the Web API for Development Mode apps in February 2026: new app
 - **Liked Songs:** it has no `snapshot_id`. The controller reads from the newest page until it reaches a track it already has, then compares `total`. If the total doesn't match, it refetches the whole list.
 - **Albums:** they don't change, so they're fetched once, when added.
 - **Example:** a first fetch of 23 playlists with 3,000 tracks, 2,000 Liked Songs and 100 saved albums is about 110 requests. A refresh where nothing changed is a few.
+
+**Requests:**
+- **One at a time:** the controller sends one Web API request at a time, with a short pause between them (250 ms by default) during catalog refreshes. Playback calls during a run aren't delayed.
+- **Retries:**
+  - A `429` waits for `Retry-After`.
+  - A `5xx`, a `503` or a timeout is retried after 5 s, and the delay doubles on each further attempt, up to 3 retries. If a `429` also carries `Retry-After`, the longer of the two wins.
+  - A `401` refreshes the token once, then retries. A `403` or `404` is not retried: it's an answer (no item access, or the item is gone).
+- **Counting:** the controller counts requests per catalog refresh and per run, with retries and `429`s counted separately. Each refresh and each run ends with one Controller log line, for example "Web API: 112 requests · 2 retried · 0 rate-limited". A rising rate-limited count is the early sign of a quota problem.
+
+**Not used:** some tools, such as [zotify](https://github.com/Googolplexed0/zotify), log in as Spotify's own desktop client and call Spotify's internal endpoints. That gets around every Development Mode limit, followed playlists included. spotibackup doesn't do this:
+- it passes the controller off as Spotify's own client, which breaks the developer terms more directly than recording does;
+- it raises the risk to an account that's used every night;
+- the internal endpoints are undocumented and change without notice;
+- it saves few requests here, because Liked Songs and albums cost the same either way.
 
 ## Backlog estimate
 
